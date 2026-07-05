@@ -1,0 +1,39 @@
+name: Build morning news
+
+on:
+  schedule:
+    # 6:00 JST = 21:00 UTC（前日）
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-morning-news
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Generate index.html
+        run: python3 build.py
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain index.html)" ]; then
+            git add index.html
+            git commit -m "chore: 自動更新 $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          else
+            echo "変更なし"
+          fi

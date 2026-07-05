@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import html as html_lib
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
@@ -97,3 +98,95 @@ def parse_feed(xml_text: str, source_name: str) -> List[Article]:
             )
         )
     return articles
+
+
+@dataclass
+class Section:
+    name: str
+    articles: List[Article]
+    failed_sources: List[str] = field(default_factory=list)
+
+
+PAGE_CSS = """
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+       line-height: 1.5; background: #fafafa; color: #1a1a1a; }
+header { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #ddd;
+         padding: 12px 16px; z-index: 10; }
+header h1 { margin: 0; font-size: 18px; }
+.updated { color: #888; font-size: 12px; margin-top: 2px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px; background: #fff;
+      border-bottom: 1px solid #eee; position: sticky; top: 52px; z-index: 9; }
+nav a { font-size: 13px; text-decoration: none; color: #0645ad; background: #eef; padding: 4px 10px;
+        border-radius: 12px; }
+main { padding: 0 16px 40px; max-width: 720px; margin: 0 auto; }
+section { margin-top: 24px; }
+section h2 { font-size: 16px; border-left: 4px solid #0645ad; padding-left: 8px; margin-bottom: 8px; }
+ul { list-style: none; padding: 0; margin: 0; }
+li { padding: 10px 0; border-bottom: 1px solid #eee; }
+li a { text-decoration: none; color: #1a1a1a; font-size: 15px; }
+li a:active { color: #0645ad; }
+.meta { display: block; color: #888; font-size: 12px; margin-top: 3px; }
+.failed { color: #b00; font-size: 12px; padding: 8px 0; }
+@media (prefers-color-scheme: dark) {
+  body { background: #16181c; color: #e6e6e6; }
+  header, nav { background: #1f2228; border-color: #333; }
+  nav a { background: #2a2f3a; color: #8ab4f8; }
+  li { border-color: #2a2a2a; }
+  li a { color: #e6e6e6; }
+  section h2 { border-color: #8ab4f8; }
+}
+"""
+
+
+def render_html(sections: List[Section], now: datetime) -> str:
+    esc = html_lib.escape
+    jst = timezone(timedelta(hours=9))
+    updated = now.astimezone(jst).strftime("%Y-%m-%d %H:%M")
+
+    # 各セクションに一意なアンカー id を付与（連番）
+    anchors = [f"sec-{i}" for i in range(len(sections))]
+
+    nav_links = "".join(
+        f'<a href="#{anchors[i]}">{esc(sec.name)}</a>' for i, sec in enumerate(sections)
+    )
+
+    body_parts = []
+    for i, sec in enumerate(sections):
+        items = []
+        for art in sec.articles:
+            rel = format_relative(art.published, now)
+            meta = f"{esc(art.source_name)}"
+            if rel:
+                meta += f" ・ {rel}"
+            items.append(
+                f'<li><a href="{esc(art.link)}" target="_blank" rel="noopener">'
+                f"{esc(art.title)}</a>"
+                f'<span class="meta">{meta}</span></li>'
+            )
+        failed = ""
+        if sec.failed_sources:
+            failed = (
+                '<div class="failed">取得失敗: '
+                + esc("、".join(sec.failed_sources))
+                + "</div>"
+            )
+        body_parts.append(
+            f'<section id="{anchors[i]}"><h2>{esc(sec.name)}</h2>'
+            f"<ul>{''.join(items)}</ul>{failed}</section>"
+        )
+
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="ja"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>今朝のニュース</title>"
+        f"<style>{PAGE_CSS}</style>"
+        "</head><body>"
+        f'<header><h1>今朝のニュース</h1><div class="updated">最終更新: {updated} JST</div></header>'
+        f"<nav>{nav_links}</nav>"
+        f"<main>{''.join(body_parts)}</main>"
+        "</body></html>"
+    )

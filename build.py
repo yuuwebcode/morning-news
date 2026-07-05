@@ -15,6 +15,24 @@ class Article:
     published: Optional[datetime]
 
 
+def format_relative(published: Optional[datetime], now: datetime) -> str:
+    """published から now までの経過を日本語の相対表現で返す。"""
+    if published is None:
+        return ""
+    delta = now - published
+    secs = delta.total_seconds()
+    if secs < 60:
+        return "たった今"
+    mins = int(secs // 60)
+    if mins < 60:
+        return f"{mins}分前"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}時間前"
+    days = hours // 24
+    return f"{days}日前"
+
+
 def _localname(tag: str) -> str:
     """'{namespace}tag' -> 'tag'。名前空間を除いたローカル名を返す。"""
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html as html_lib
+import urllib.request
+import urllib.error
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -190,3 +192,86 @@ def render_html(sections: List[Section], now: datetime) -> str:
         f"<main>{''.join(body_parts)}</main>"
         "</body></html>"
     )
+
+
+# (セクション名, ソース名, RSS URL)
+SOURCES = [
+    ("国内 総合", "NHK 主要", "https://www.nhk.or.jp/rss/news/cat0.xml"),
+    ("国内 総合", "Yahoo!トピックス", "https://news.yahoo.co.jp/rss/topics/top-picks.xml"),
+    ("世界", "NHK 国際", "https://www.nhk.or.jp/rss/news/cat6.xml"),
+    ("世界", "BBC News Japan", "https://feeds.bbci.co.uk/japanese/rss.xml"),
+    ("経済・ビジネス", "NHK 経済", "https://www.nhk.or.jp/rss/news/cat5.xml"),
+    ("経済・ビジネス", "Yahoo! 経済", "https://news.yahoo.co.jp/rss/topics/business.xml"),
+    ("テクノロジー・IT", "ITmedia", "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml"),
+    ("テクノロジー・IT", "Yahoo! IT", "https://news.yahoo.co.jp/rss/topics/it.xml"),
+    ("テクノロジー・IT", "はてブ テクノロジー", "https://b.hatena.ne.jp/hotentry/it.rss"),
+    ("スポーツ・エンタメ", "Yahoo! スポーツ", "https://news.yahoo.co.jp/rss/topics/sports.xml"),
+    ("スポーツ・エンタメ", "Yahoo! エンタメ", "https://news.yahoo.co.jp/rss/topics/entertainment.xml"),
+]
+
+MAX_PER_SECTION = 12
+FETCH_TIMEOUT = 20
+
+
+def fetch(url: str) -> Optional[str]:
+    """URL の本文文字列を返す。失敗時は None。リダイレクトは urllib が自動追従する。"""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (morning-news bot)"})
+    try:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+            raw = resp.read()
+        return raw.decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        print(f"  [WARN] fetch failed: {url} ({e})")
+        return None
+
+
+def build_sections(now: datetime) -> List[Section]:
+    """SOURCES を走査してセクションのリストを組み立てる。
+    セクションの並びは SOURCES に初出した順を保つ。"""
+    order: List[str] = []
+    by_section = {}  # name -> {"arts": [...], "failed": [...]}
+    for section_name, source_name, url in SOURCES:
+        if section_name not in by_section:
+            by_section[section_name] = {"arts": [], "failed": []}
+            order.append(section_name)
+        body = fetch(url)
+        if body is None:
+            by_section[section_name]["failed"].append(source_name)
+            continue
+        arts = parse_feed(body, source_name)
+        if not arts:
+            by_section[section_name]["failed"].append(source_name)
+        by_section[section_name]["arts"].extend(arts)
+
+    sections: List[Section] = []
+    for name in order:
+        arts = by_section[name]["arts"]
+        # published がある記事を新しい順に。日付なしは末尾へ。
+        arts.sort(
+            key=lambda a: a.published or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        sections.append(
+            Section(
+                name=name,
+                articles=arts[:MAX_PER_SECTION],
+                failed_sources=by_section[name]["failed"],
+            )
+        )
+    return sections
+
+
+def main() -> None:
+    now = datetime.now(timezone.utc)
+    print("Building morning-news...")
+    sections = build_sections(now)
+    total = sum(len(s.articles) for s in sections)
+    print(f"  {len(sections)} sections, {total} articles")
+    html_out = render_html(sections, now)
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(html_out)
+    print("  wrote index.html")
+
+
+if __name__ == "__main__":
+    main()
